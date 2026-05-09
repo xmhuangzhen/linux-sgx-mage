@@ -355,6 +355,52 @@ int CLoader::build_pages(const uint64_t start_rva, const uint64_t size, const vo
 
     assert(IS_PAGE_ALIGNED(start_rva) && IS_PAGE_ALIGNED(size));
 
+    uint64_t skip_rva = 0;
+    uint64_t skip_size = 0;
+    const Section* mage_section = m_parser.get_mage_section();
+    if (mage_section != NULL)
+    {
+        skip_rva = mage_section->get_rva();
+        skip_size = mage_section->virtual_size();
+    }
+
+    while(offset < size)
+    {
+        //call driver to add page;
+        if (rva >= skip_rva + skip_size || rva + SE_PAGE_SIZE <= skip_rva)
+        {
+            if(SGX_SUCCESS != (ret = get_enclave_creator()->add_enclave_page(ENCLAVE_ID_IOCTL, GET_PTR(void, source, 0), rva, sinfo, attr)))
+            {
+                //if add page failed , we should remove enclave somewhere;
+                return ret;
+            }
+        }
+        offset += SE_PAGE_SIZE;
+        rva += SE_PAGE_SIZE;
+    }
+
+    return SGX_SUCCESS;
+}
+
+int CLoader::build_mage_pages()
+{
+    int ret = SGX_SUCCESS;
+
+    const Section* mage_section = m_parser.get_mage_section_ex();
+    if (mage_section == NULL)
+        return ret;
+
+    uint64_t offset = 0;
+    uint64_t rva = mage_section->get_rva();
+    uint64_t size = mage_section->virtual_size();
+    const void *source = mage_section->raw_data();
+    sec_info_t sinfo;
+    memset(&sinfo, 0, sizeof(sinfo));
+    sinfo.flags = 0x201;
+    uint32_t attr = 3;
+
+    assert(IS_PAGE_ALIGNED(rva) && IS_PAGE_ALIGNED(size));
+
     while(offset < size)
     {
         //call driver to add page;
@@ -662,6 +708,13 @@ int CLoader::build_image(Reserved_FormerlyLaunchToken * const reserved, sgx_attr
                                       0)))
     {
         SE_TRACE(SE_TRACE_WARNING, "build heap/thread context failed\n");
+        goto fail;
+    }
+
+    // build mage section
+    if(SGX_SUCCESS != (ret = build_mage_pages()))
+    {
+        SE_TRACE(SE_TRACE_WARNING, "build mage sections failed\n");
         goto fail;
     }
 

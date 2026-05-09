@@ -37,6 +37,7 @@
 
 #include "enclave_creator.h"
 #include "sgx_eid.h"
+#include "sgx_mage.h"
 
 #define SIZE_NAMED_VALUE 8
 
@@ -55,13 +56,14 @@ public:
     bool use_se_hw() const;
     bool is_EDMM_supported(sgx_enclave_id_t enclave_id);
     bool is_driver_compatible();
-    int get_enclave_info(uint8_t *hash, int size, uint64_t *quota);
+    int get_enclave_info(uint8_t *hash, int size, uint64_t *quota, sgx_mage_entry_t *mage_t = NULL);
 private:
     uint8_t m_enclave_hash[SGX_HASH_SIZE];
     EVP_MD_CTX  *m_ctx;
     bool m_hash_valid_flag;
     sgx_enclave_id_t m_eid;
     uint64_t m_quota;
+    sgx_mage_entry_t m_mage;
 };
 
 #endif

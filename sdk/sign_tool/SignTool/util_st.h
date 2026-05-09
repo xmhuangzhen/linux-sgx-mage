@@ -45,6 +45,8 @@
     "   catsig                  Generate the signed enclave with the input signature file, the\n"\
     "                           public key and the enclave signing material\n"\
     "   dump                    Dump metadata information for a signed enclave file\n"\
+    "   genmage                 Generate enclave material for mutual attestation\n"\
+    "   signmage                Sign enclave with mutual attestation\n"\
     "Options:\n"\
     "   -enclave                Specify the enclave file to be signed or already signed\n"\
     "                           It is a required option for the four commands\n"\
@@ -60,6 +62,8 @@
     "   -dumpfile               Specify a file to dump metadata information (text format)\n" \
     "                           It is a required option for \"dump\"\n" \
     "   -cssfile                Specify a file to dump the enclave SIGSTRUCT information (binary format)\n" \
+    "   -magein                 Specify a file to include in mutual attestation\n" \
+    "   -mageout                Specify a file to output the enclave's metadata for mutual attestation\n" \
     "   -ignore-rel-error       By default, sgx_sign provides an error for enclaves with\n" \
     "                           text relocations. You can ignore the error and continue signing\n" \
     "                           by providing this option. But it is recommended you eliminate the\n" \
@@ -106,7 +110,7 @@
 
 // error message for cmdline_parse()
 #define LACK_PARA_ERROR                     "Lack of parameters.\n"
-#define UNREC_CMD_ERROR                     "Cannot recognize the command \"%s\".\nCommand \"sign/gendata/catsig\" is required.\n"
+#define UNREC_CMD_ERROR                     "Cannot recognize the command \"%s\".\nCommand \"sign/gendata/catsig/dump/genmage/signmage\" is required.\n"
 #define REPEAT_OPTION_ERROR                 "Repeatly specified \"%s\" option.\n"
 #define INVALID_FILE_NAME_ERROR             "The File name is not correct for \"%s\" option.\n"
 #define LACK_REQUIRED_OPTION_ERROR          "Option \"%s\" is required for the command \"%s\".\n"
@@ -182,7 +186,9 @@ typedef enum _command_mode_t
     SIGN = 0,
     GENDATA,
     CATSIG,
-    DUMP
+    DUMP,
+    GENMAGE,
+    SIGNMAGE
 } command_mode_t;
 
 

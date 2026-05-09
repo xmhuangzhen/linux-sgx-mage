@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2019 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,47 +29,17 @@
  *
  */
 
-#include "section.h"
-
-#include <string.h>
-#include <stdlib.h>
-
-Section::Section(const uint8_t* start_addr, uint64_t size, uint64_t virt_size,
-                 uint64_t rva, si_flags_t sf, uint64_t offset)
-    :m_start_addr(start_addr), m_raw_data_size(size), m_rva(rva), m_offset(offset),
-     m_virtual_size(virt_size), m_si_flag(sf)
-{}
-
-Section::~Section()
-{
-}
-
-const uint8_t* Section::raw_data(void) const
-{
-    return m_start_addr;
-}
-
-uint64_t Section::raw_data_size(void) const
-{
-    return m_raw_data_size;
-}
-
-uint64_t Section::get_rva(void) const
-{
-    return m_rva;
-}
-
-uint64_t Section::get_offset(void) const
-{
-    return m_offset;
-}
-
-uint64_t Section::virtual_size(void) const
-{
-    return m_virtual_size;
-}
-
-si_flags_t Section::get_si_flags(void) const
-{
-    return m_si_flag;
-}
+enclave {
+    include "sgx_eid.h"
+    trusted {
+        public uint32_t e3_ecall_main();
+    };
+    /* 
+     * ocall_print_string - invokes OCALL to display string buffer inside the enclave.
+     *  [in]: copy the string buffer to App outside.
+     *  [string]: specifies 'str' is a NULL terminated buffer.
+     */
+    untrusted {
+        void e3_ocall_print_string([in, string] const char *str);
+    };
+};

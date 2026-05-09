@@ -38,6 +38,7 @@
 #        - trts:          libsgx_trts.a
 #        - tcrypto:       libsgx_tcrypto.a
 #        - tprotected_fs: libsgx_tprotected_fs.a
+#        - sgx_mage:      libsgx_mage.a
 #        - tcmalloc:      libsgx_tcmalloc.a
 #        - sgx_pcl:       libsgx_pcl.a
 #        - openmp:        libsgx_omp.a
@@ -64,7 +65,7 @@ LIBTCXX    := $(BUILD_DIR)/libsgx_tcxx.a
 LIBTSE     := $(BUILD_DIR)/libsgx_tservice.a
 
 .PHONY: components
-components: tstdc tcxx tservice trts tcrypto tprotected_fs uprotected_fs ptrace sample_crypto libcapable simulation signtool edger8r tcmalloc sgx_pcl sgx_encrypt sgx_tswitchless sgx_uswitchless pthread openmp protobuf ttls utls tvl
+components: tstdc tcxx tservice trts tcrypto sgx_mage tprotected_fs uprotected_fs ptrace sample_crypto libcapable simulation signtool edger8r tcmalloc sgx_pcl sgx_encrypt sgx_tswitchless sgx_uswitchless pthread openmp protobuf ttls utls tvl
 
 # ---------------------------------------------------
 #  tstdc
@@ -202,6 +203,10 @@ trts:
 tcrypto: edger8r
 	$(MAKE) -C tlibcrypto/
 
+.PHONY: sgx_mage
+sgx_mage: tcrypto
+	$(MAKE) -C mage/
+
 .PHONY: tcmalloc
 tcmalloc:
 	$(MAKE) -C gperftools/
@@ -325,6 +330,7 @@ clean:
 	$(MAKE) -C tsafecrt/                           clean
 	$(MAKE) -C gperftools/                         clean
 	$(MAKE) -C tlibcrypto/                         clean
+	$(MAKE) -C mage/                               clean
 	$(MAKE) -C protected_fs/sgx_tprotected_fs/     clean
 	$(MAKE) -C protected_fs/sgx_uprotected_fs/     clean
 	$(MAKE) -C debugger_interface/linux/           clean

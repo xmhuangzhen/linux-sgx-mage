@@ -55,6 +55,7 @@
 #include "parserfactory.h"
 #include "elf_helper.h"
 #include "crypto_wrapper.h"
+#include "sgx_mage.h"
 
 #include <unistd.h>
 #include <libgen.h>
@@ -85,7 +86,9 @@ typedef enum _file_path_t
     SIG,
     UNSIGNED,
     DUMPFILE,
-    CSSFILE
+    CSSFILE,
+    MAGEIN,
+    MAGEOUT
 } file_path_t;
 
 
@@ -128,10 +131,54 @@ static bool get_enclave_info(BinParser *parser, bin_fmt_t *bf, uint64_t * meta_o
     return true;
 }
 
+static bool get_mage_section_info(const char *dllpath, uint64_t *mage_rva, uint64_t *mage_offset, uint64_t *mage_size)
+{
+    assert(dllpath && mage_rva && mage_offset && mage_size);
+
+    off_t file_size = 0;
+    se_file_handle_t fh = open_file(dllpath);
+    if (fh == THE_INVALID_HANDLE)
+    {
+        se_trace(SE_TRACE_ERROR, OPEN_FILE_ERROR, dllpath);
+        return false;
+    }
+
+    std::unique_ptr<map_handle_t, void (*)(map_handle_t*)> mh(map_file(fh, &file_size), unmap_file);
+    if (!mh)
+    {
+        close_handle(fh);
+        return false;
+    }
+
+    std::unique_ptr<BinParser> parser(binparser::get_parser(mh->base_addr, (size_t)file_size));
+    assert(parser != NULL);
+
+    sgx_status_t status = parser->run_parser();
+    if (status != SGX_SUCCESS)
+    {
+        se_trace(SE_TRACE_ERROR, INVALID_ENCLAVE_ERROR);
+        close_handle(fh);
+        return false;
+    }
+
+    const Section* mage_section = parser->get_mage_section();
+    if (mage_section == NULL)
+    {
+        close_handle(fh);
+        return false;
+    }
+
+    *mage_rva = mage_section->get_rva();
+    *mage_offset = mage_section->get_offset();
+    *mage_size = mage_section->virtual_size();
+    close_handle(fh);
+    return true;
+}
+
 // measure_enclave():
 //    1. Get the enclave hash by loading enclave
 //    2. Get the enclave info - metadata offset and enclave file format
-static bool measure_enclave(uint8_t *hash, const char *dllpath, const char *fipspath, const xml_parameter_t *parameter, uint32_t option_flag_bits, metadata_t *metadata, uint64_t *meta_offset, uint8_t *meta_versions)
+static bool measure_enclave(uint8_t *hash, const char *dllpath, const char *fipspath, const xml_parameter_t *parameter, uint32_t option_flag_bits, metadata_t *metadata, uint64_t *meta_offset, uint8_t *meta_versions, uint64_t *mage_rva = NULL, uint64_t *mage_offset = NULL, uint64_t *mage_size = NULL, sgx_mage_entry_t *mage_t = NULL, bool for_sign = false)
 {
     assert(hash && dllpath && metadata && meta_offset && meta_versions);
     bool res = false;
@@ -181,6 +228,16 @@ static bool measure_enclave(uint8_t *hash, const char *dllpath, const char *fips
         close_handle(fh);
         return false;
     }
+    const Section* mage_section = parser->get_mage_section();
+    if (mage_section != NULL) {
+        if (mage_rva != NULL)
+            *mage_rva = mage_section->get_rva();
+        if (mage_offset != NULL)
+            *mage_offset = mage_section->get_offset();
+        if (mage_size != NULL)
+            *mage_size = mage_section->virtual_size();
+    }
+    parser->set_for_sign(for_sign);
     if(parser->has_init_section() && IGNORE_INIT_SEC_ERROR(option_flag_bits) == false)
     {
         se_trace(SE_TRACE_ERROR, INIT_SEC_ERROR);
@@ -294,7 +351,7 @@ static bool measure_enclave(uint8_t *hash, const char *dllpath, const char *fips
         res = false;
         break;
     case SGX_SUCCESS:
-        ret = static_cast<EnclaveCreatorST*>(get_enclave_creator())->get_enclave_info(hash, SGX_HASH_SIZE, &quota);
+        ret = static_cast<EnclaveCreatorST*>(get_enclave_creator())->get_enclave_info(hash, SGX_HASH_SIZE, &quota, mage_t);
         if(ret != SGX_SUCCESS)
         {
             res = false;
@@ -681,7 +738,9 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
         {"-sig", NULL, PAR_INVALID},
         {"-unsigned", NULL, PAR_INVALID},
         {"-dumpfile", NULL, PAR_OPTIONAL},
-        {"-cssfile", NULL, PAR_OPTIONAL}};
+        {"-cssfile", NULL, PAR_OPTIONAL},
+        {"-magein", NULL, PAR_INVALID},
+        {"-mageout", NULL, PAR_INVALID}};
     param_struct_t params_gendata[] = {
         {"-enclave", NULL, PAR_REQUIRED},
         {"-config", NULL, PAR_OPTIONAL},
@@ -690,7 +749,9 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
         {"-sig", NULL, PAR_INVALID},
         {"-unsigned", NULL, PAR_INVALID},
         {"-dumpfile", NULL, PAR_INVALID},
-        {"-cssfile", NULL, PAR_INVALID}};
+        {"-cssfile", NULL, PAR_INVALID},
+        {"-magein", NULL, PAR_INVALID},
+        {"-mageout", NULL, PAR_INVALID}};
     param_struct_t params_catsig[] = {
         {"-enclave", NULL, PAR_REQUIRED},
         {"-config", NULL, PAR_OPTIONAL},
@@ -699,7 +760,9 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
         {"-sig", NULL, PAR_REQUIRED},
         {"-unsigned", NULL, PAR_REQUIRED},
         {"-dumpfile", NULL, PAR_OPTIONAL},
-        {"-cssfile", NULL, PAR_OPTIONAL}};
+        {"-cssfile", NULL, PAR_OPTIONAL},
+        {"-magein", NULL, PAR_INVALID},
+        {"-mageout", NULL, PAR_INVALID}};
     param_struct_t params_dump[] = {
         {"-enclave", NULL, PAR_REQUIRED},
         {"-config", NULL, PAR_INVALID},
@@ -708,11 +771,35 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
         {"-sig", NULL, PAR_INVALID},
         {"-unsigned", NULL, PAR_INVALID},
         {"-dumpfile", NULL, PAR_REQUIRED},
-        {"-cssfile", NULL, PAR_OPTIONAL}};
+        {"-cssfile", NULL, PAR_OPTIONAL},
+        {"-magein", NULL, PAR_INVALID},
+        {"-mageout", NULL, PAR_INVALID}};
+    param_struct_t params_genmage[] = {
+        {"-enclave", NULL, PAR_REQUIRED},
+        {"-config", NULL, PAR_OPTIONAL},
+        {"-key", NULL, PAR_REQUIRED},
+        {"-out", NULL, PAR_REQUIRED},
+        {"-sig", NULL, PAR_INVALID},
+        {"-unsigned", NULL, PAR_INVALID},
+        {"-dumpfile", NULL, PAR_OPTIONAL},
+        {"-cssfile", NULL, PAR_OPTIONAL},
+        {"-magein", NULL, PAR_INVALID},
+        {"-mageout", NULL, PAR_REQUIRED}};
+    param_struct_t params_signmage[] = {
+        {"-enclave", NULL, PAR_REQUIRED},
+        {"-config", NULL, PAR_OPTIONAL},
+        {"-key", NULL, PAR_REQUIRED},
+        {"-out", NULL, PAR_REQUIRED},
+        {"-sig", NULL, PAR_INVALID},
+        {"-unsigned", NULL, PAR_INVALID},
+        {"-dumpfile", NULL, PAR_OPTIONAL},
+        {"-cssfile", NULL, PAR_OPTIONAL},
+        {"-magein", NULL, PAR_REQUIRED},
+        {"-mageout", NULL, PAR_INVALID}};
 
 
-    const char *mode_m[] ={"sign", "gendata","catsig", "dump"};
-    param_struct_t *params[] = {params_sign, params_gendata, params_catsig, params_dump};
+    const char *mode_m[] ={"sign", "gendata","catsig", "dump", "genmage", "signmage"};
+    param_struct_t *params[] = {params_sign, params_gendata, params_catsig, params_dump, params_genmage, params_signmage};
     unsigned int tempidx=0;
     for(; tempidx<sizeof(mode_m)/sizeof(mode_m[0]); tempidx++)
     {
@@ -859,6 +946,7 @@ static bool generate_output(int mode, int ktype, const uint8_t *enclave_hash, co
     switch(mode)
     {
     case SIGN:
+    case SIGNMAGE:
         {
             if(ktype != PRIVATE_KEY || !pkey)
             {
@@ -1432,7 +1520,7 @@ int main(int argc, char* argv[])
                                    {"EnableAEXNotify",      1,                     0,              0,                   0},
                                    {"EnableIPPFIPS",        1,                     0,              0,                   0},
                                    {"EnableOSSLFIPS",       1,                     0,              0,                   0}};
-    const char *path[8] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    const char *path[10] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
     uint8_t enclave_hash[SGX_HASH_SIZE] = {0};
     uint8_t metadata_raw[METADATA_SIZE];
     metadata_t *metadata = (metadata_t*)metadata_raw;
@@ -1440,8 +1528,12 @@ int main(int argc, char* argv[])
     int key_type = UNIDENTIFIABLE_KEY; //indicate the type of the input key file
     size_t parameter_count = sizeof(parameter)/sizeof(parameter[0]);
     uint64_t meta_offset = 0;
+    uint64_t mage_rva = 0;
+    uint64_t mage_offset = 0;
+    uint64_t mage_size = 0;
     uint32_t option_flag_bits = 0;
-     EVP_PKEY *pkey = NULL;
+    EVP_PKEY *pkey = NULL;
+    sgx_mage_t *magein_t = NULL;
     memset(&metadata_raw, 0, sizeof(metadata_raw));
     uint8_t meta_versions = 0;
 
@@ -1489,11 +1581,6 @@ int main(int argc, char* argv[])
     {
         goto clear_return;
     }
-    if(copy_file(path[DLL], path[OUTPUT]) == false)
-    {
-        se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
-        goto clear_return;
-    }
 
     if(parameter[ENABLEOSSLFIPS].value)
     {
@@ -1516,6 +1603,87 @@ int main(int argc, char* argv[])
         se_trace(SE_TRACE_DEBUG, "OSSL FIPS module path: %s\n", fips_module_path);
     }
 
+    if(mode == GENMAGE)
+    {
+        const char *genmage_enclave_path = path[DLL];
+        if (parameter[ENABLEOSSLFIPS].value)
+        {
+            if(copy_file(path[DLL], path[OUTPUT]) == false)
+            {
+                se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
+                goto clear_return;
+            }
+            genmage_enclave_path = path[OUTPUT];
+        }
+
+        sgx_mage_entry_t mage_t;
+        memset(&mage_t, 0, sizeof(mage_t));
+        if(measure_enclave(enclave_hash, genmage_enclave_path, fips_module_path, parameter, option_flag_bits, metadata,
+                           &meta_offset, &meta_versions, &mage_rva, &mage_offset, &mage_size, &mage_t, true) == false)
+        {
+            se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
+            goto clear_return;
+        }
+        if(mage_size == 0)
+        {
+            se_trace(SE_TRACE_ERROR, INVALID_ENCLAVE_ERROR);
+            goto clear_return;
+        }
+        mage_t.offset = mage_rva;
+        if(write_data_to_file(path[MAGEOUT], std::ios::binary | std::ios::out | std::ios::app,
+                              reinterpret_cast<uint8_t*>(&mage_t), sizeof(mage_t), 0) == false)
+        {
+            se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
+            goto clear_return;
+        }
+        se_trace(SE_TRACE_ERROR, SUCCESS_EXIT);
+        res = 0;
+        goto clear_return;
+    }
+
+    if(copy_file(path[DLL], path[OUTPUT]) == false)
+    {
+        se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
+        goto clear_return;
+    }
+
+    if(mode == SIGNMAGE)
+    {
+        size_t magein_size = get_file_size(path[MAGEIN]);
+        size_t magein_t_size = magein_size + sizeof(sgx_mage_t);
+        if (magein_size % sizeof(sgx_mage_entry_t) != 0 || magein_t_size > SGX_MAGE_SEC_SIZE) {
+            se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
+            goto clear_return;
+        }
+
+        magein_t = (sgx_mage_t *)malloc(magein_t_size);
+        if (magein_t == NULL) {
+            se_trace(SE_TRACE_ERROR, NO_MEMORY_ERROR);
+            goto clear_return;
+        }
+        memset(magein_t, 0, magein_t_size);
+        magein_t->size = magein_size / sizeof(sgx_mage_entry_t);
+        if(read_file_to_buf(path[MAGEIN], (uint8_t*)magein_t->entries, magein_size) == false)
+        {
+            se_trace(SE_TRACE_ERROR, READ_FILE_ERROR, path[MAGEIN]);
+            goto clear_return;
+        }
+
+        if(get_mage_section_info(path[OUTPUT], &mage_rva, &mage_offset, &mage_size) == false)
+            goto clear_return;
+        if(mage_size == 0 || magein_t_size > mage_size)
+        {
+            se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
+            goto clear_return;
+        }
+        if(write_data_to_file(path[OUTPUT], std::ios::in | std::ios::binary | std::ios::out,
+                              reinterpret_cast<uint8_t*>(magein_t), magein_t_size, mage_offset) == false)
+        {
+            se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
+            goto clear_return;
+        }
+    }
+
     if(measure_enclave(enclave_hash, path[OUTPUT], fips_module_path, parameter, option_flag_bits, metadata, &meta_offset, &meta_versions) == false)
     {
         se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
@@ -1528,7 +1696,7 @@ int main(int argc, char* argv[])
     }
 
     //to verify
-    if(mode == SIGN || mode == CATSIG)
+    if(mode == SIGN || mode == CATSIG || mode == SIGNMAGE)
     {
         if(verify_css_signature(pkey, &(metadata->enclave_css)) == false)
         {
@@ -1571,6 +1739,8 @@ int main(int argc, char* argv[])
     res = 0;
 
 clear_return:
+    if(magein_t)
+        free(magein_t);
     if(pkey)
         EVP_PKEY_free(pkey);
     if(res == -1 && path[OUTPUT])
