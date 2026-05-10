@@ -35,3 +35,4 @@ linux/reproducibility/code_dir/
 
 # IDE files
 .idea/
+external/cbor/sgx_libcbor/
