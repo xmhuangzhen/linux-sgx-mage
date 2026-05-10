@@ -82,7 +82,11 @@ else
 endif
 
 App_Cpp_Files := $(wildcard App/*.cpp)
-App_Include_Paths := -I$(SGX_SDK)/include -I./Include
+Sample_Include_Paths :=
+ifneq ($(wildcard Include/.),)
+	Sample_Include_Paths := -I./Include
+endif
+App_Include_Paths := -I$(SGX_SDK)/include $(Sample_Include_Paths)
 
 App_C_Flags := -fPIC -Wno-attributes $(App_Include_Paths)
 # Three configuration modes - Debug, prerelease, release
@@ -129,7 +133,19 @@ Crypto_Library_Name := sgx_tcrypto
 Enclave_Cpp_Files_1 := $(wildcard Enclave1/*.cpp)
 Enclave_Cpp_Files_2 := $(wildcard Enclave2/*.cpp)
 Enclave_Cpp_Files_3 := $(wildcard Enclave3/*.cpp)
-Enclave_Include_Paths := -I$(SGX_SDK)/include -I$(SGX_SDK)/include/tlibc -I$(SGX_SDK)/include/libcxx -I./Include
+Enclave_Include_Paths := -I$(SGX_SDK)/include -I$(SGX_SDK)/include/tlibc -I$(SGX_SDK)/include/libcxx $(Sample_Include_Paths)
+SGX_MAGE_INCLUDE_PATH ?= $(CURDIR)/../../common/inc
+ifneq ($(wildcard $(SGX_MAGE_INCLUDE_PATH)/sgx_mage.h),)
+	Enclave_Include_Paths += -I$(SGX_MAGE_INCLUDE_PATH)
+endif
+SGX_MAGE_SRC_DIR ?= $(CURDIR)/../../sdk/mage
+SGX_MAGE_LIB_DIR ?= $(SGX_MAGE_SRC_DIR)
+ifneq ($(wildcard $(SGX_MAGE_SRC_DIR)/Makefile),)
+	SGX_MAGE_LIB := $(SGX_MAGE_LIB_DIR)/libsgx_mage.a
+	SGX_MAGE_LINK_INPUT := $(SGX_MAGE_LIB)
+else
+	SGX_MAGE_LINK_INPUT := -lsgx_mage
+endif
 
 CC_BELOW_4_9 := $(shell expr "`$(CC) -dumpversion`" \< "4.9")
 ifeq ($(CC_BELOW_4_9), 1)
@@ -155,7 +171,7 @@ Enclave_Security_Link_Flags := -Wl,-z,relro,-z,now,-z,noexecstack
 Common_Enclave_Link_Flags := $(Enclave_Security_Link_Flags) \
     -Wl,--no-undefined -nostdlib -nodefaultlibs -nostartfiles -L$(SGX_LIBRARY_PATH) \
 	-Wl,--whole-archive -l$(Trts_Library_Name) -Wl,--no-whole-archive \
-	-Wl,--start-group -lsgx_tstdc -lsgx_tcxx -lsgx_mage -l$(Crypto_Library_Name) -L. -l$(Service_Library_Name) -Wl,--end-group \
+	-Wl,--start-group -lsgx_tstdc -lsgx_tcxx $(SGX_MAGE_LINK_INPUT) -l$(Crypto_Library_Name) -L. -l$(Service_Library_Name) -Wl,--end-group \
 	-Wl,-Bstatic -Wl,-Bsymbolic -Wl,--no-undefined \
 	-Wl,-pie,-eenclave_entry -Wl,--export-dynamic  \
 	-Wl,--defsym,__ImageBase=0 -Wl,--gc-sections
@@ -285,7 +301,12 @@ Enclave1/%.o: Enclave1/%.cpp Enclave1/Enclave1_t.h
 	@$(CXX) $(Enclave_Cxx_Flags) -c $< -o $@
 	@echo "CXX  <=  $<"
 
-Enclave1.so: Enclave1/Enclave1_t.o $(Enclave_Cpp_Objects_1)
+ifneq ($(SGX_MAGE_LIB),)
+$(SGX_MAGE_LIB):
+	@$(MAKE) -C $(SGX_MAGE_SRC_DIR)
+endif
+
+Enclave1.so: Enclave1/Enclave1_t.o $(Enclave_Cpp_Objects_1) $(SGX_MAGE_LIB)
 	@$(CXX) Enclave1/Enclave1_t.o $(Enclave_Cpp_Objects_1) -o $@ $(Enclave1_Link_Flags)
 	@echo "LINK =>  $@"
 
@@ -303,7 +324,7 @@ Enclave2/%.o: Enclave2/%.cpp Enclave2/Enclave2_t.h
 	@$(CXX) $(Enclave_Cxx_Flags) -c $< -o $@
 	@echo "CXX  <=  $<"
 
-Enclave2.so: Enclave2/Enclave2_t.o $(Enclave_Cpp_Objects_2)
+Enclave2.so: Enclave2/Enclave2_t.o $(Enclave_Cpp_Objects_2) $(SGX_MAGE_LIB)
 	@$(CXX) Enclave2/Enclave2_t.o $(Enclave_Cpp_Objects_2) -o $@ $(Enclave2_Link_Flags)
 	@echo "LINK =>  $@"
 
@@ -321,7 +342,7 @@ Enclave3/%.o: Enclave3/%.cpp Enclave3/Enclave3_t.h
 	@$(CXX) $(Enclave_Cxx_Flags) -c $< -o $@
 	@echo "CXX  <=  $<"
 
-Enclave3.so: Enclave3/Enclave3_t.o $(Enclave_Cpp_Objects_3)
+Enclave3.so: Enclave3/Enclave3_t.o $(Enclave_Cpp_Objects_3) $(SGX_MAGE_LIB)
 	@$(CXX) Enclave3/Enclave3_t.o $(Enclave_Cpp_Objects_3) -o $@ $(Enclave3_Link_Flags)
 	@echo "LINK =>  $@"
 

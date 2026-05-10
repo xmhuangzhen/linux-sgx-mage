@@ -33,6 +33,7 @@
 #define _ENCLAVE_CREATOR_SIGN_H_
 
 #include <openssl/evp.h>
+#include <openssl/sha.h>
 
 
 #include "enclave_creator.h"
@@ -60,7 +61,9 @@ public:
 private:
     uint8_t m_enclave_hash[SGX_HASH_SIZE];
     EVP_MD_CTX  *m_ctx;
+    SHA256_CTX m_mage_ctx;
     bool m_hash_valid_flag;
+    bool m_mage_ctx_valid;
     sgx_enclave_id_t m_eid;
     uint64_t m_quota;
     sgx_mage_entry_t m_mage;

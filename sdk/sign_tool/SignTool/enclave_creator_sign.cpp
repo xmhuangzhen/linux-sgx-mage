@@ -60,45 +60,29 @@ uint64_t elrange_start_address = 0;
 uint64_t elrange_size = 0;
 
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
-struct evp_md_ctx_st
-{
-    const EVP_MD *reqdigest;
-    const EVP_MD *digest;
-    ENGINE *engine;
-    unsigned long flags;
-    void *md_data;
-    EVP_PKEY_CTX *pctx;
-    int (*update)(EVP_MD_CTX *ctx, const void *data, size_t count);
-    void *provctx;
-    EVP_MD *fetched_digest;
-};
-#elif OPENSSL_VERSION_NUMBER >= 0x10100000L
-struct evp_md_ctx_st
-{
-    const EVP_MD *digest;
-    ENGINE *engine;
-    unsigned long flags;
-    void *md_data;
-    EVP_PKEY_CTX *pctx;
-    int (*update)(EVP_MD_CTX *ctx, const void *data, size_t count);
-};
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
-
-static void *get_digest_state(EVP_MD_CTX *ctx)
+static bool mage_sha256_init(SHA256_CTX *ctx)
 {
-#if OPENSSL_VERSION_NUMBER >= 0x10100000L
-    return reinterpret_cast<evp_md_ctx_st *>(ctx)->md_data;
-#else
-    return ctx->md_data;
-#endif
+    return SHA256_Init(ctx) == 1;
 }
 
+static bool mage_sha256_update(SHA256_CTX *ctx, const void *data, size_t count)
+{
+    return SHA256_Update(ctx, data, count) == 1;
+}
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+#pragma GCC diagnostic pop
+#endif
 
 EnclaveCreatorST::EnclaveCreatorST()
 {
     m_hash_valid_flag = false;
     memset(m_enclave_hash, 0, SGX_HASH_SIZE);
     m_ctx = NULL;
+    memset(&m_mage_ctx, 0, sizeof(m_mage_ctx));
+    m_mage_ctx_valid = false;
     m_eid = EID;
     m_quota = 0;
     memset(&m_mage, 0, sizeof(m_mage));
@@ -128,6 +112,8 @@ int EnclaveCreatorST::create_enclave(secs_t *secs, sgx_enclave_id_t *enclave_id,
     
     memset(m_enclave_hash, 0, SGX_HASH_SIZE);
     memset(&m_mage, 0, sizeof(m_mage));
+    memset(&m_mage_ctx, 0, sizeof(m_mage_ctx));
+    m_mage_ctx_valid = false;
     if((m_ctx = EVP_MD_CTX_create()) == NULL)
     {
         se_trace(SE_TRACE_DEBUG, "ERROR - EVP_MD_CTX_create: %s.\n", ERR_error_string(ERR_get_error(), NULL));
@@ -138,6 +124,12 @@ int EnclaveCreatorST::create_enclave(secs_t *secs, sgx_enclave_id_t *enclave_id,
         se_trace(SE_TRACE_DEBUG, "ERROR - EVP_DigestInit_ex: %s.\n", ERR_error_string(ERR_get_error(), NULL));
         return SGX_ERROR_UNEXPECTED;
     }
+    if(!mage_sha256_init(&m_mage_ctx))
+    {
+        se_trace(SE_TRACE_DEBUG, "ERROR - SHA256_Init.\n");
+        return SGX_ERROR_UNEXPECTED;
+    }
+    m_mage_ctx_valid = true;
 
     uint8_t ecreat_val[SIZE_NAMED_VALUE] = "ECREATE";
     
@@ -158,6 +150,11 @@ int EnclaveCreatorST::create_enclave(secs_t *secs, sgx_enclave_id_t *enclave_id,
     if(EVP_DigestUpdate(m_ctx, &data_block, DATA_BLOCK_SIZE) != 1)
     {
         se_trace(SE_TRACE_DEBUG, "ERROR - EVP_DigestUpdate: %s.\n", ERR_error_string(ERR_get_error(), NULL));
+        return SGX_ERROR_UNEXPECTED;
+    }
+    if(!mage_sha256_update(&m_mage_ctx, &data_block, DATA_BLOCK_SIZE))
+    {
+        se_trace(SE_TRACE_DEBUG, "ERROR - SHA256_Update.\n");
         return SGX_ERROR_UNEXPECTED;
     }
     m_mage.size += DATA_BLOCK_SIZE;
@@ -217,6 +214,11 @@ int EnclaveCreatorST::add_enclave_page(sgx_enclave_id_t enclave_id, void *src, u
         se_trace(SE_TRACE_DEBUG, "ERROR - EVP_digestUpdate: %s.\n", ERR_error_string(ERR_get_error(), NULL));
         return SGX_ERROR_UNEXPECTED;
     }
+    if(!mage_sha256_update(&m_mage_ctx, data_block, DATA_BLOCK_SIZE))
+    {
+        se_trace(SE_TRACE_DEBUG, "ERROR - SHA256_Update.\n");
+        return SGX_ERROR_UNEXPECTED;
+    }
     m_mage.size += DATA_BLOCK_SIZE;
 
     /* If the page need to eextend, do eextend. */
@@ -238,6 +240,11 @@ int EnclaveCreatorST::add_enclave_page(sgx_enclave_id_t enclave_id, void *src, u
                 se_trace(SE_TRACE_DEBUG, "ERROR - EVP_digestUpdate: %s.\n", ERR_error_string(ERR_get_error(), NULL));
                 return SGX_ERROR_UNEXPECTED;
             }
+            if(!mage_sha256_update(&m_mage_ctx, data_block, DATA_BLOCK_SIZE))
+            {
+                se_trace(SE_TRACE_DEBUG, "ERROR - SHA256_Update.\n");
+                return SGX_ERROR_UNEXPECTED;
+            }
             m_mage.size += DATA_BLOCK_SIZE;
 
             for(int j = 0; j < EEXTEND_TIME; j++)
@@ -246,6 +253,11 @@ int EnclaveCreatorST::add_enclave_page(sgx_enclave_id_t enclave_id, void *src, u
                 if(EVP_DigestUpdate(m_ctx, data_block, DATA_BLOCK_SIZE) != 1)
                 {
                     se_trace(SE_TRACE_DEBUG, "ERROR - EVP_digestUpdate: %s.\n", ERR_error_string(ERR_get_error(), NULL));
+                    return SGX_ERROR_UNEXPECTED;
+                }
+                if(!mage_sha256_update(&m_mage_ctx, data_block, DATA_BLOCK_SIZE))
+                {
+                    se_trace(SE_TRACE_DEBUG, "ERROR - SHA256_Update.\n");
                     return SGX_ERROR_UNEXPECTED;
                 }
                 m_mage.size += DATA_BLOCK_SIZE;
@@ -268,10 +280,10 @@ int EnclaveCreatorST::init_enclave(sgx_enclave_id_t enclave_id, enclave_css_t *e
     memset(temp_hash, 0, SGX_HASH_SIZE);
     unsigned int hash_len;
 
-    void *digest_state = get_digest_state(m_ctx);
-    if (digest_state != NULL) {
-        memcpy_s(m_mage.digest, sizeof(m_mage.digest), digest_state, sizeof(m_mage.digest));
+    if (!m_mage_ctx_valid) {
+        return SGX_ERROR_UNEXPECTED;
     }
+    memcpy_s(m_mage.digest, sizeof(m_mage.digest), &m_mage_ctx, sizeof(m_mage.digest));
 
     /* Complete computation of the SHA256 digest and store the result into the hash. */
     if(EVP_DigestFinal_ex(m_ctx, temp_hash, &hash_len) != 1)

@@ -10,7 +10,7 @@
 #define HANDLE_HASH_OFFSET 168
 #define SHA256_DIGEST_SIZE 32
 
-const uint8_t __attribute__((section(SGX_MAGE_SEC_NAME))) sgx_mage_sec_buf[SGX_MAGE_SEC_SIZE] __attribute__((aligned(SE_PAGE_SIZE))) = {};
+uint8_t __attribute__((used, section(SGX_MAGE_SEC_NAME))) sgx_mage_sec_buf[SGX_MAGE_SEC_SIZE] __attribute__((aligned(SE_PAGE_SIZE))) = {};
 
 uint64_t sgx_mage_get_size(void)
 {
